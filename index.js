@@ -224,11 +224,16 @@ async function addPromoText(input, output, promo) {
     const img = sharp(input);
     const { width, height } = await img.metadata();
 
-    // 🔥 INSIDE PURPLE BOX - BOTTOM CENTER POSITION
-    const yPosition = height * 0.88;  // Inside the purple box at bottom
-
-    const fontSize = Math.max(55, Math.min(width * 0.07, 90));
-
+    // DEFINE THE PURPLE BOX POSITION
+    // Adjust these values based on your actual banner
+    const boxTop = height * 0.82;      // Where purple box starts (82% down)
+    const boxBottom = height * 0.94;    // Where purple box ends (94% down)
+    const boxCenterY = (boxTop + boxBottom) / 2;  // Middle of purple box
+    
+    // Font size based on box height
+    const boxHeight = boxBottom - boxTop;
+    const fontSize = Math.min(boxHeight * 0.5, 65);  // 50% of box height
+    
     const svg = `
     <svg width="${width}" height="${height}">
         <defs>
@@ -242,16 +247,18 @@ async function addPromoText(input, output, promo) {
         </defs>
 
         <!-- Shadow -->
-        <text x="50%" y="${yPosition+2}"
+        <text x="50%" y="${boxCenterY + 2}"
         text-anchor="middle"
+        dominant-baseline="middle"
         font-size="${fontSize}"
         font-family="Arial Black"
         fill="black"
         opacity="0.5">${promo}</text>
 
         <!-- Main Text -->
-        <text x="50%" y="${yPosition}"
+        <text x="50%" y="${boxCenterY}"
         text-anchor="middle"
+        dominant-baseline="middle"
         font-size="${fontSize}"
         font-family="Arial Black"
         fill="white"
