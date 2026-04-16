@@ -10,54 +10,103 @@ const fetch = require('node-fetch');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // ================= CONFIG =================
-const ADMIN_IDS = [123456789]; // your telegram id
+const ADMIN_IDS = [123456789];
 
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("Mongo Connected"))
-.catch(err => console.log(err));
+.then(()=>console.log("Mongo Connected"))
+.catch(err=>console.log(err));
 
 const User = mongoose.model('User', new mongoose.Schema({
-    userId: Number,
-    phone: String,
-    language: String,
-    country: String
+    userId:Number,
+    phone:String
 }));
 
 // ================= SESSION =================
 const sessions = {};
 function getSession(id){
-    if(!sessions[id]) sessions[id] = { step:'phone', data:{} };
+    if(!sessions[id]) sessions[id]={ step:'phone', data:{} };
     return sessions[id];
 }
 
-// ================= TEXT =================
-function getText(lang){
-    const t = {
-        en:{ phone:"📱 Share your number", lang:"🌐 Select language", country:"🌍 Select country", type:"🎨 Select banner type", promo:"✏️ Enter Promo Code", done:"✅ Posters generated!" },
-        bn:{ phone:"📱 নাম্বার শেয়ার করুন", lang:"🌐 ভাষা নির্বাচন করুন", country:"🌍 দেশ নির্বাচন করুন", type:"🎨 ব্যানার টাইপ নির্বাচন করুন", promo:"✏️ প্রোমো কোড দিন", done:"✅ পোস্টার তৈরি হয়েছে!" },
-        hi:{ phone:"📱 नंबर शेयर करें", lang:"🌐 भाषा चुनें", country:"🌍 देश चुनें", type:"🎨 बैनर चुनें", promo:"✏️ प्रोमो कोड डालें", done:"✅ पोस्टर तैयार!" },
-        ar:{ phone:"📱 شارك رقمك", lang:"🌐 اختر اللغة", country:"🌍 اختر الدولة", type:"🎨 اختر نوع البانر", promo:"✏️ أدخل كود العرض", done:"✅ تم إنشاء البوستر!" }
-    };
-    return t[lang] || t.en;
+// ================= START =================
+bot.start(async ctx=>{
+    const user = await User.findOne({ userId: ctx.from.id });
+    const s = getSession(ctx.from.id);
+
+    // EXISTING USER
+    if(user && user.phone){
+        if(ADMIN_IDS.includes(ctx.from.id)){
+            s.step='admin_menu';
+            return ctx.reply("👑 Admin Panel",
+                Markup.keyboard([
+                    ["🛠 Upload Template"],
+                    ["📢 Broadcast"]
+                ]).resize()
+            );
+        }
+
+        s.step='language';
+        return sendLanguage(ctx);
+    }
+
+    // NEW USER
+    s.step='phone';
+    ctx.reply("📱 Share phone",
+        Markup.keyboard([[Markup.button.contactRequest("📲 Share Number")]]).resize()
+    );
+});
+
+// ================= LANGUAGE =================
+function sendLanguage(ctx){
+    return ctx.reply("🌐 Select Language",
+        Markup.inlineKeyboard([
+            [Markup.button.callback("🇺🇸 English","lang_en"),Markup.button.callback("🇧🇩 বাংলা","lang_bn")],
+            [Markup.button.callback("🇮🇳 हिंदी","lang_hi"),Markup.button.callback("🇸🇦 العربية","lang_ar")]
+        ])
+    );
 }
 
-// ================= START =================
-bot.start(ctx=>{
-    const s = getSession(ctx.from.id);
-    s.step='phone';
+bot.action(/lang_(.+)/, ctx=>{
+    const s=getSession(ctx.from.id);
+    s.data.language=ctx.match[1];
+    s.step='country';
 
-    ctx.reply("📱 Share your phone",
-        Markup.keyboard([
-            [Markup.button.contactRequest("📲 Share Number")]
-        ]).resize()
+    ctx.editMessageText("🌍 Select Country",
+        Markup.inlineKeyboard([
+            [Markup.button.callback("BD","country_bd"),Markup.button.callback("IN","country_in")],
+            [Markup.button.callback("TR","country_tr"),Markup.button.callback("PH","country_ph")],
+            [Markup.button.callback("TH","country_th"),Markup.button.callback("PK","country_pk")]
+        ])
     );
+});
+
+// ================= COUNTRY =================
+bot.action(/country_(.+)/, ctx=>{
+    const s=getSession(ctx.from.id);
+    s.data.country=ctx.match[1];
+    s.step='type';
+
+    ctx.editMessageText("🎨 Select Type",
+        Markup.inlineKeyboard([
+            [Markup.button.callback("Match","type_match"),Markup.button.callback("Promo","type_promo")],
+            [Markup.button.callback("All","type_all")]
+        ])
+    );
+});
+
+// ================= TYPE =================
+bot.action(/type_(.+)/, ctx=>{
+    const s=getSession(ctx.from.id);
+    s.data.type=ctx.match[1];
+    s.step='promo';
+    ctx.reply("✏️ Enter Promo Code");
 });
 
 // ================= PHONE =================
 bot.on('contact', async ctx=>{
-    const s = getSession(ctx.from.id);
-    const phone = ctx.message.contact.phone_number;
+    const s=getSession(ctx.from.id);
+    const phone=ctx.message.contact.phone_number;
 
     await User.findOneAndUpdate(
         { userId: ctx.from.id },
@@ -76,205 +125,136 @@ bot.on('contact', async ctx=>{
     }
 
     s.step='language';
-
-    ctx.reply("🌐 Select language",
-        Markup.inlineKeyboard([
-            [Markup.button.callback("🇺🇸 English","lang_en"), Markup.button.callback("🇧🇩 বাংলা","lang_bn")],
-            [Markup.button.callback("🇮🇳 हिंदी","lang_hi"), Markup.button.callback("🇸🇦 العربية","lang_ar")]
-        ])
-    );
+    sendLanguage(ctx);
 });
 
-// ================= LANGUAGE =================
-bot.action(/lang_(.+)/, ctx=>{
-    const s = getSession(ctx.from.id);
-    s.data.language = ctx.match[1];
-    s.step='country';
-
-    ctx.editMessageText("🌍 Select country",
-        Markup.inlineKeyboard([
-            [Markup.button.callback("🇧🇩 BD","country_bd"), Markup.button.callback("🇮🇳 IN","country_in")],
-            [Markup.button.callback("🇹🇷 TR","country_tr"), Markup.button.callback("🇵🇭 PH","country_ph")],
-            [Markup.button.callback("🇹🇭 TH","country_th"), Markup.button.callback("🇵🇰 PK","country_pk")]
-        ])
-    );
+// ================= ADMIN BUTTONS =================
+bot.hears("🛠 Upload Template", ctx=>{
+    if(!ADMIN_IDS.includes(ctx.from.id)) return;
+    const s=getSession(ctx.from.id);
+    s.step='admin_upload';
+    ctx.reply("Send image");
 });
 
-// ================= COUNTRY =================
-bot.action(/country_(.+)/, ctx=>{
-    const s = getSession(ctx.from.id);
-    s.data.country = ctx.match[1];
-    s.step='type';
-
-    ctx.editMessageText("🎨 Select banner type",
-        Markup.inlineKeyboard([
-            [Markup.button.callback("⚽ Match","type_match"), Markup.button.callback("🎁 Promo","type_promo")],
-            [Markup.button.callback("📦 All","type_all")]
-        ])
-    );
-});
-
-// ================= TYPE =================
-bot.action(/type_(.+)/, ctx=>{
-    const s = getSession(ctx.from.id);
-    s.data.type = ctx.match[1];
-    s.step='promo';
-
-    const txt = getText(s.data.language);
-    ctx.reply(txt.promo);
+bot.hears("📢 Broadcast", ctx=>{
+    if(!ADMIN_IDS.includes(ctx.from.id)) return;
+    const s=getSession(ctx.from.id);
+    s.step='broadcast';
+    ctx.reply("Send message");
 });
 
 // ================= TEXT =================
 bot.on('text', async ctx=>{
-    const s = getSession(ctx.from.id);
-
-    // ADMIN MENU
-    if(s.step==='admin_menu'){
-        if(ctx.message.text==="🛠 Upload Template"){
-            s.step='admin_upload';
-            return ctx.reply("Send image now");
-        }
-
-        if(ctx.message.text==="📢 Broadcast"){
-            s.step='broadcast';
-            return ctx.reply("Send broadcast message");
-        }
-    }
+    const s=getSession(ctx.from.id);
 
     // BROADCAST
     if(s.step==='broadcast'){
-        const users = await User.find({});
+        const users=await User.find({});
+        let sent=0;
+
         for(const u of users){
-            try{ await bot.telegram.sendMessage(u.userId, ctx.message.text); } catch{}
+            try{
+                await bot.telegram.sendMessage(u.userId, ctx.message.text);
+                sent++;
+            }catch{}
         }
+
         s.step='admin_menu';
-        return ctx.reply("✅ Broadcast sent");
+        return ctx.reply(`✅ Sent to ${sent} users`);
     }
 
-    // PROMO CODE
+    // PROMO
     if(s.step==='promo'){
-        s.data.promo = ctx.message.text.trim();
-        ctx.reply("⏳ Generating posters...");
-        return generatePosters(ctx,s.data);
+        s.data.promo=ctx.message.text.trim();
+        ctx.reply("⏳ Generating...");
+        return generate(ctx,s.data);
     }
 });
 
 // ================= GENERATE =================
-async function generatePosters(ctx,data){
+async function generate(ctx,data){
     try{
-        let dir = path.join(__dirname,'assets',data.language,data.country,data.type);
+        const dir=path.join(__dirname,'assets','en','bd','match');
 
-        if(!fs.existsSync(dir)){
-            return ctx.reply("❌ No templates found");
+        if(!fs.existsSync(dir)) return ctx.reply("❌ No templates");
+
+        const files=fs.readdirSync(dir).filter(f=>f.endsWith('.jpg'));
+
+        const outputs=[];
+
+        for(const f of files.slice(0,5)){
+            const input=path.join(dir,f);
+            const output=path.join('/tmp',Date.now()+f);
+
+            await addText(input,output,data.promo);
+            outputs.push(output);
         }
 
-        const files = fs.readdirSync(dir).filter(f=>f.endsWith('.jpg')||f.endsWith('.png'));
-
-        if(!files.length){
-            return ctx.reply("❌ No templates found");
-        }
-
-        const results = [];
-
-        for(const file of files.slice(0,5)){
-            const input = path.join(dir,file);
-            const output = path.join('/tmp',`${Date.now()}_${file}`);
-
-            await addPromoText(input,output,data.promo);
-            results.push(output);
-        }
-
-        await ctx.replyWithMediaGroup(results.map(f=>({
+        await ctx.replyWithMediaGroup(outputs.map(o=>({
             type:'photo',
-            media:{ source:f }
+            media:{ source:o }
         })));
 
-        const txt = getText(data.language);
-        await ctx.reply(txt.done);
+        await ctx.reply(`🔥 Promo: ${data.promo}`);
 
         // ADMIN NOTIFY
-        for(const adminId of ADMIN_IDS){
-            await bot.telegram.sendMessage(adminId,
-                `🎨 New Banner Generated\nUser: ${ctx.from.id}\nPromo: ${data.promo}\nLang: ${data.language}\nCountry: ${data.country}`
+        for(const admin of ADMIN_IDS){
+            bot.telegram.sendMessage(admin,
+                `New Promo\nUser: ${ctx.from.id}\nCode: ${data.promo}`
             );
         }
 
-        // FINAL PROMO MESSAGE
-        await ctx.reply(
-            `🚀 Use Promo Code: ${data.promo}`,
-            Markup.inlineKeyboard([
-                [Markup.button.url("📱 Download App","https://7starswin.com")]
-            ])
-        );
-
-    }catch(err){
-        console.log(err);
-        ctx.reply("❌ Error generating posters");
+    }catch(e){
+        console.log(e);
+        ctx.reply("Error");
     }
 }
 
-// ================= IMAGE PROCESS =================
-async function addPromoText(input,output,promo){
-    const image = sharp(input);
-    const meta = await image.metadata();
+// ================= FIXED TEXT ENGINE =================
+async function addText(input,output,promo){
+    const img=sharp(input);
+    const { width,height }=await img.metadata();
 
-    const yPosition = meta.height * 0.865;
-    const fontSize = Math.max(60, Math.min(meta.width * 0.09, 110));
+    const y = height * 0.82; // 🔥 FIXED SAFE POSITION
+    const font = Math.max(70, width*0.08);
 
-    const svg = `
-    <svg width="${meta.width}" height="${meta.height}">
-        <defs>
-            <filter id="glow">
-                <feGaussianBlur stdDeviation="4" result="blur"/>
-                <feMerge>
-                    <feMergeNode in="blur"/>
-                    <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-            </filter>
-        </defs>
-
-        <text
-            x="50%"
-            y="${yPosition}"
-            text-anchor="middle"
-            font-family="Impact, Arial Black, sans-serif"
-            font-size="${fontSize}"
-            font-weight="900"
-            fill="white"
-            letter-spacing="3"
-            filter="url(#glow)"
-        >
-            ${promo}
+    const svg=`
+    <svg width="${width}" height="${height}">
+        <text x="50%" y="${y}"
+        text-anchor="middle"
+        font-size="${font}"
+        font-weight="900"
+        fill="white"
+        font-family="Impact, Arial Black"
+        letter-spacing="3">
+        ${promo}
         </text>
-    </svg>
-    `;
+    </svg>`;
 
-    await image
-        .composite([{ input: Buffer.from(svg) }])
-        .jpeg({ quality: 95 })
-        .toFile(output);
+    await img.composite([{ input:Buffer.from(svg) }])
+    .jpeg({ quality:95 })
+    .toFile(output);
 }
 
-// ================= ADMIN PHOTO UPLOAD =================
+// ================= UPLOAD =================
 bot.on('photo', async ctx=>{
-    const s = getSession(ctx.from.id);
+    const s=getSession(ctx.from.id);
     if(s.step!=='admin_upload') return;
 
-    const file = ctx.message.photo.pop();
-    const link = await ctx.telegram.getFileLink(file.file_id);
+    const file=ctx.message.photo.pop();
+    const link=await ctx.telegram.getFileLink(file.file_id);
 
-    const folder = path.join(__dirname,'assets','en','bd','match');
+    const folder=path.join(__dirname,'assets','en','bd','match');
     fs.mkdirSync(folder,{ recursive:true });
 
-    const res = await fetch(link.href);
-    const buffer = await res.arrayBuffer();
+    const res=await fetch(link.href);
+    const buffer=await res.arrayBuffer();
 
-    fs.writeFileSync(path.join(folder,`${Date.now()}.jpg`),Buffer.from(buffer));
+    fs.writeFileSync(path.join(folder,Date.now()+".jpg"),Buffer.from(buffer));
 
-    s.step='admin_menu';
-    ctx.reply("✅ Template uploaded");
+    ctx.reply("✅ Uploaded");
 });
 
 // ================= RUN =================
 bot.launch();
-console.log("🚀 Bot running");
+console.log("BOT RUNNING");
