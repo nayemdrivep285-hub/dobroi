@@ -172,37 +172,90 @@ bot.on('text', async ctx=>{
 });
 
 // ================= GENERATE =================
-async function generate(ctx,data){
-    try{
-        const dir=path.join(__dirname,'assets','en','bd','match');
+async function addText(input, output, promo) {
+    const img = sharp(input);
+    const { width, height } = await img.metadata();
 
-        if(!fs.existsSync(dir)) return ctx.reply("❌ No templates");
+    // ================= SMART DETECTION =================
+    const raw = await img.clone().resize(100, 100).grayscale().raw().toBuffer();
 
-        const files=fs.readdirSync(dir).filter(f=>f.endsWith('.jpg'));
+    let bestY = 0;
+    let bestScore = 999999;
 
-        const outputs=[];
-
-        for(const f of files.slice(0,5)){
-            const input=path.join(dir,f);
-            const output=path.join('/tmp',Date.now()+f);
-
-            await addText(input,output,data.promo);
-            outputs.push(output);
+    for (let y = 50; y < 100; y++) {
+        let sum = 0;
+        for (let x = 10; x < 90; x++) {
+            sum += raw[y * 100 + x];
         }
-
-        await ctx.replyWithMediaGroup(outputs.map(o=>({
-            type:'photo',
-            media:{ source:o }
-        })));
-
-        await ctx.reply(`🔥 Promo: ${data.promo}`);
-
-        // ADMIN NOTIFY
-        for(const admin of ADMIN_IDS){
-            bot.telegram.sendMessage(admin,
-                `New Promo\nUser: ${ctx.from.id}\nCode: ${data.promo}`
-            );
+        if (sum < bestScore) {
+            bestScore = sum;
+            bestY = y;
         }
+    }
+
+    const yPosition = (bestY / 100) * height;
+
+    // ================= FONT SIZE =================
+    const fontSize = Math.max(70, Math.min(width * 0.085, 120));
+
+    // ================= SVG WITH REAL FONT =================
+    const svg = `
+    <svg width="${width}" height="${height}">
+        <style>
+            @font-face {
+                font-family: 'Bebas';
+                src: url('file://${process.cwd()}/fonts/BebasNeue-Regular.ttf');
+            }
+        </style>
+
+        <defs>
+            <!-- Glow -->
+            <filter id="glow">
+                <feGaussianBlur stdDeviation="3" result="blur"/>
+                <feMerge>
+                    <feMergeNode in="blur"/>
+                    <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+            </filter>
+        </defs>
+
+        <!-- SHADOW -->
+        <text 
+            x="50%" 
+            y="${yPosition}"
+            text-anchor="middle"
+            font-family="Bebas"
+            font-size="${fontSize}"
+            fill="black"
+            opacity="0.6"
+            transform="translate(2,2)"
+        >
+            ${promo}
+        </text>
+
+        <!-- MAIN TEXT -->
+        <text 
+            x="50%" 
+            y="${yPosition}"
+            text-anchor="middle"
+            font-family="Bebas"
+            font-size="${fontSize}"
+            fill="white"
+            stroke="black"
+            stroke-width="2"
+            letter-spacing="4"
+            filter="url(#glow)"
+        >
+            ${promo}
+        </text>
+    </svg>
+    `;
+
+    await img
+        .composite([{ input: Buffer.from(svg) }])
+        .jpeg({ quality: 95 })
+        .toFile(output);
+}
 
     }catch(e){
         console.log(e);
