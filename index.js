@@ -250,17 +250,42 @@ async function generate(ctx, data) {
 // ==========================
 // POSTER ENGINE
 // ==========================
-async function createPoster(input, output, promo) {
-    const img = sharp(input);
-    const meta = await img.metadata();
+async function askPromoCode(ctx, session) {
+    const userData = await getUserData(ctx.from.id);
+    const texts = loadLanguage(userData?.language || 'en');
+    
+    session.state = 'waiting_promo_code';
+    
+    await ctx.reply(
+        `✏️ **${texts.type_your_promo}**\n\n${texts.enter_promo_code_message}`,
+        { parse_mode: 'Markdown' }
+    );
+}
 
-    const svg = `
-    <svg width="${meta.width}" height="${meta.height}">
-        <text x="50%" y="90%" text-anchor="middle"
-        font-size="60" fill="white" font-weight="bold">
-        ${promo}
-        </text>
-    </svg>`;
+// Function to add text overlay to image with adjusted positioning
+async function addTextToImage(inputPath, outputPath, promoCode) {
+    try {
+        const image = sharp(inputPath);
+        const { width, height } = await image.metadata();
+        
+        // Font size calculation
+        const fontSize = Math.max(54, Math.min(width * 0.091, 115));
+        
+        // Text positioned at 94.5%
+        const textSvg = `
+            <svg width="${width}" height="${height}">
+                <text 
+                    x="50%" 
+                    y="94.5%" 
+                    text-anchor="middle" 
+                    font-family="Impact, 'Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
+                    font-size="${fontSize}" 
+                    font-weight="900"
+                    fill="white" 
+                    letter-spacing="2px"
+                    text-transform="uppercase"
+                >${promoCode}</text>
+            </svg>`;
 
     await img.composite([{ input: Buffer.from(svg) }]).jpeg({ quality: 85 }).toFile(output);
 }
