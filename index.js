@@ -224,10 +224,10 @@ async function addPromoText(input, output, promo) {
     const img = sharp(input);
     const { width, height } = await img.metadata();
 
-    // 🔥 SAFE ZONE POSITION (STABLE FOR ALL YOUR BANNERS)
-    const yPosition = height * 0.83;
+    // 🔥 BOTTOM-CENTER POSITION (inside promo box)
+    const yPosition = height * 0.85;  // 85% from top (near bottom)
 
-    const fontSize = Math.max(70, Math.min(width * 0.09, 120));
+    const fontSize = Math.max(50, Math.min(width * 0.08, 100));
 
     const svg = `
     <svg width="${width}" height="${height}">
