@@ -9,70 +9,45 @@ const fetch = require('node-fetch');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// ==========================
-// CONFIG
-// ==========================
+// ================= CONFIG =================
 const ADMIN_IDS = [123456789]; // 🔥 PUT YOUR TELEGRAM ID
 
-// ==========================
-// MONGODB
-// ==========================
+// ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("✅ MongoDB Connected"))
-.catch(err => console.log(err));
+.catch(err => console.log("❌ Mongo Error:", err.message));
 
 const User = mongoose.model('User', new mongoose.Schema({
     userId: Number,
     phone: String,
-    language: String,
-    country: String,
-    createdAt: { type: Date, default: Date.now }
+    language: { type: String, default: 'en' },
+    country: String
 }));
 
-const Activity = mongoose.model('Activity', new mongoose.Schema({
-    userId: Number,
-    type: String,
-    promo: String,
-    createdAt: { type: Date, default: Date.now }
-}));
-
-// ==========================
-// SESSION
-// ==========================
+// ================= SESSION =================
 const sessions = {};
-function getSession(id) {
+const getSession = (id) => {
     if (!sessions[id]) sessions[id] = { step: 'phone', data: {} };
     return sessions[id];
-}
+};
 
-// ==========================
-// UTIL
-// ==========================
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ==========================
-// START
-// ==========================
-bot.start((ctx) => {
+// ================= START =================
+bot.start(ctx => {
     const s = getSession(ctx.from.id);
     s.step = 'phone';
 
-    return ctx.reply(
-        "📱 Share your phone number",
-        Markup.keyboard([
-            [Markup.button.contactRequest("📲 Share Number")]
-        ]).resize()
+    ctx.reply("📱 Share your phone",
+        Markup.keyboard([[Markup.button.contactRequest("📲 Share Number")]])
+        .resize()
     );
 });
 
-// ==========================
-// PHONE
-// ==========================
+// ================= PHONE =================
 bot.on('contact', async (ctx) => {
     const s = getSession(ctx.from.id);
-
     const phone = ctx.message.contact.phone_number;
-    s.data.phone = phone;
 
     await User.findOneAndUpdate(
         { userId: ctx.from.id },
@@ -80,21 +55,28 @@ bot.on('contact', async (ctx) => {
         { upsert: true }
     );
 
+    // ADMIN MENU
+    if (ADMIN_IDS.includes(ctx.from.id)) {
+        s.step = 'admin_menu';
+
+        return ctx.reply("👑 Admin Panel",
+            Markup.keyboard([
+                ["🛠 Upload Template"],
+                ["📢 Broadcast"]
+            ]).resize()
+        );
+    }
+
     s.step = 'language';
 
-    return ctx.reply(
-        "🌐 Select Language",
+    ctx.reply("🌐 Select Language",
         Markup.inlineKeyboard([
-            [Markup.button.callback("🇺🇸 English", "lang_en")],
-            [Markup.button.callback("🇧🇩 Bengali", "lang_bn")],
-            [Markup.button.callback("🇮🇳 Hindi", "lang_hi")]
+            [Markup.button.callback("🇺🇸 English", "lang_en")]
         ])
     );
 });
 
-// ==========================
-// LANGUAGE
-// ==========================
+// ================= LANGUAGE =================
 bot.action(/lang_(.+)/, async (ctx) => {
     const s = getSession(ctx.from.id);
     const lang = ctx.match[1];
@@ -105,139 +87,115 @@ bot.action(/lang_(.+)/, async (ctx) => {
 
     s.step = 'country';
 
-    return ctx.editMessageText(
-        "🌍 Select Country",
+    ctx.editMessageText("🌍 Select Country",
         Markup.inlineKeyboard([
-            [Markup.button.callback("🇧🇩 Bangladesh", "country_bd"),
-             Markup.button.callback("🇮🇳 India", "country_in")],
-            [Markup.button.callback("🇹🇷 Turkey", "country_tr"),
-             Markup.button.callback("🇵🇭 Philippines", "country_ph")],
-            [Markup.button.callback("🇹🇭 Thailand", "country_th"),
-             Markup.button.callback("🇵🇰 Pakistan", "country_pk")]
+            [Markup.button.callback("🇧🇩 BD", "country_bd"),
+             Markup.button.callback("🇮🇳 IN", "country_in")]
         ])
     );
 });
 
-// ==========================
-// COUNTRY
-// ==========================
+// ================= COUNTRY =================
 bot.action(/country_(.+)/, async (ctx) => {
     const s = getSession(ctx.from.id);
-    const country = ctx.match[1];
-
-    s.data.country = country;
-
-    await User.updateOne({ userId: ctx.from.id }, { country });
-
+    s.data.country = ctx.match[1];
     s.step = 'type';
 
-    return ctx.editMessageText(
-        "🎨 Select Banner Type",
+    ctx.editMessageText("🎨 Select Type",
         Markup.inlineKeyboard([
             [Markup.button.callback("⚽ Match", "type_match"),
-             Markup.button.callback("🎁 Promo", "type_promo")],
-            [Markup.button.callback("📦 All", "type_all")]
+             Markup.button.callback("🎁 Promo", "type_promo")]
         ])
     );
 });
 
-// ==========================
-// TYPE
-// ==========================
-bot.action(/type_(.+)/, (ctx) => {
+// ================= TYPE =================
+bot.action(/type_(.+)/, ctx => {
     const s = getSession(ctx.from.id);
     s.data.type = ctx.match[1];
     s.step = 'promo';
 
-    return ctx.reply("✏️ Enter Promo Code (Max 10):");
+    ctx.reply("✏️ Enter Promo Code (max 10)");
 });
 
-// ==========================
-// TEXT HANDLER (PROMO + BROADCAST)
-// ==========================
+// ================= TEXT =================
 bot.on('text', async (ctx) => {
     const s = getSession(ctx.from.id);
 
-    // ======================
+    // ADMIN MENU
+    if (s.step === 'admin_menu' && ADMIN_IDS.includes(ctx.from.id)) {
+
+        if (ctx.message.text === "🛠 Upload Template") {
+            s.step = 'admin_upload';
+            return ctx.reply("📤 Send image (saved to EN/BD/MATCH)");
+        }
+
+        if (ctx.message.text === "📢 Broadcast") {
+            s.step = 'broadcast';
+            return ctx.reply("Send message:");
+        }
+    }
+
     // BROADCAST
-    // ======================
-    if (s.step === 'broadcast' && ADMIN_IDS.includes(ctx.from.id)) {
+    if (s.step === 'broadcast') {
         const users = await User.find({});
-        let success = 0;
-
-        await ctx.reply(`🚀 Sending to ${users.length} users...`);
-
         for (let u of users) {
             try {
                 await bot.telegram.sendMessage(u.userId, ctx.message.text);
-                success++;
                 await sleep(50);
             } catch {}
         }
-
         s.step = null;
-
-        return ctx.reply(`✅ Done: ${success} users`);
+        return ctx.reply("✅ Broadcast Done");
     }
 
-    // ======================
-    // PROMO INPUT
-    // ======================
+    // PROMO
     if (s.step === 'promo') {
         const promo = ctx.message.text.trim();
 
-        if (promo.length > 10) {
-            return ctx.reply("❌ Max 10 characters");
-        }
+        if (promo.length > 10) return ctx.reply("❌ Max 10 char");
 
         s.data.promo = promo;
 
-        await Activity.create({
-            userId: ctx.from.id,
-            type: "generate",
-            promo
-        });
-
-        await ctx.reply("⏳ Generating posters...");
+        ctx.reply("⏳ Generating posters...");
 
         return generate(ctx, s.data);
     }
 });
 
-// ==========================
-// GENERATE
-// ==========================
+// ================= GENERATE =================
 async function generate(ctx, data) {
     try {
-        const dir = path.join(
-            __dirname,
-            'assets',
-            data.language,
-            data.country,
-            data.type
-        );
+        let dir = path.join(__dirname, 'assets', data.language || 'en', data.country, data.type);
+
+        // fallback
+        if (!fs.existsSync(dir)) {
+            dir = path.join(__dirname, 'assets', 'en', data.country, data.type);
+        }
 
         if (!fs.existsSync(dir)) {
             return ctx.reply("❌ No templates found");
         }
 
-        const files = fs.readdirSync(dir).slice(0, 5);
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.jpg') || f.endsWith('.png'));
+
+        if (!files.length) return ctx.reply("❌ Folder empty");
+
+        const selected = files.slice(0, 5);
         const results = [];
 
-        for (let f of files) {
+        for (let f of selected) {
             const input = path.join(dir, f);
             const output = path.join('/tmp', `${Date.now()}_${f}`);
 
-            await createPoster(input, output, data.promo);
+            await addTextToImage(input, output, data.promo);
             results.push(output);
         }
 
-        await ctx.replyWithMediaGroup(
-            results.map(x => ({
-                type: 'photo',
-                media: { source: x }
-            }))
-        );
+        await ctx.replyWithMediaGroup(results.map(x => ({
+            type: 'photo',
+            media: { source: x }
+        })));
 
         ctx.reply(`🔥 Promo Code: ${data.promo}`);
 
@@ -247,103 +205,57 @@ async function generate(ctx, data) {
     }
 }
 
-// ==========================
-// POSTER ENGINE
-// ==========================
-async function askPromoCode(ctx, session) {
-    const userData = await getUserData(ctx.from.id);
-    const texts = loadLanguage(userData?.language || 'en');
-    
-    session.state = 'waiting_promo_code';
-    
-    await ctx.reply(
-        `✏️ **${texts.type_your_promo}**\n\n${texts.enter_promo_code_message}`,
-        { parse_mode: 'Markdown' }
-    );
-}
-
-// Function to add text overlay to image with adjusted positioning
+// ================= IMAGE ENGINE (FIXED) =================
 async function addTextToImage(inputPath, outputPath, promoCode) {
     try {
         const image = sharp(inputPath);
         const { width, height } = await image.metadata();
-        
-        // Font size calculation
-        const fontSize = Math.max(54, Math.min(width * 0.091, 115));
-        
-        // Text positioned at 94.5%
-        const textSvg = `
-            <svg width="${width}" height="${height}">
-                <text 
-                    x="50%" 
-                    y="94.5%" 
-                    text-anchor="middle" 
-                    font-family="Impact, 'Bebas Neue', 'Anton', 'Oswald', Arial Black, Arial, sans-serif"
-                    font-size="${fontSize}" 
-                    font-weight="900"
-                    fill="white" 
-                    letter-spacing="2px"
-                    text-transform="uppercase"
-                >${promoCode}</text>
-            </svg>`;
 
-    await img.composite([{ input: Buffer.from(svg) }]).jpeg({ quality: 85 }).toFile(output);
+        const yPosition = height * 0.78;
+        const fontSize = Math.max(60, Math.min(width * 0.08, 110));
+
+        const svg = `
+        <svg width="${width}" height="${height}">
+            <defs>
+                <filter id="glow">
+                    <feGaussianBlur stdDeviation="4" result="blur"/>
+                    <feMerge>
+                        <feMergeNode in="blur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+
+            <text 
+                x="50%" 
+                y="${yPosition}" 
+                text-anchor="middle"
+                font-family="Impact, Arial Black, sans-serif"
+                font-size="${fontSize}"
+                font-weight="900"
+                fill="#ffffff"
+                letter-spacing="3px"
+                filter="url(#glow)"
+            >
+                ${promoCode}
+            </text>
+        </svg>
+        `;
+
+        await image
+            .composite([{ input: Buffer.from(svg) }])
+            .jpeg({ quality: 90 })
+            .toFile(outputPath);
+
+        return true;
+
+    } catch (err) {
+        console.log(err);
+        return false;
+    }
 }
 
-// ==========================
-// ADMIN PANEL
-// ==========================
-
-// start admin
-bot.command('admin', (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id)) return;
-
-    const s = getSession(ctx.from.id);
-    s.step = 'admin_lang';
-
-    ctx.reply("Select Language", Markup.inlineKeyboard([
-        [Markup.button.callback("EN", "a_lang_en"),
-         Markup.button.callback("BN", "a_lang_bn")]
-    ]));
-});
-
-// language
-bot.action(/a_lang_(.+)/, (ctx) => {
-    const s = getSession(ctx.from.id);
-    s.data = { lang: ctx.match[1] };
-    s.step = 'admin_country';
-
-    ctx.editMessageText("Country?", Markup.inlineKeyboard([
-        [Markup.button.callback("BD", "a_c_bd"),
-         Markup.button.callback("IN", "a_c_in")],
-        [Markup.button.callback("TR", "a_c_tr"),
-         Markup.button.callback("PK", "a_c_pk")]
-    ]));
-});
-
-// country
-bot.action(/a_c_(.+)/, (ctx) => {
-    const s = getSession(ctx.from.id);
-    s.data.country = ctx.match[1];
-    s.step = 'admin_type';
-
-    ctx.editMessageText("Type?", Markup.inlineKeyboard([
-        [Markup.button.callback("match", "a_t_match"),
-         Markup.button.callback("promo", "a_t_promo")],
-        [Markup.button.callback("all", "a_t_all")]
-    ]));
-});
-
-// type
-bot.action(/a_t_(.+)/, (ctx) => {
-    const s = getSession(ctx.from.id);
-    s.data.type = ctx.match[1];
-    s.step = 'admin_upload';
-
-    ctx.reply("📤 Send image");
-});
-
-// upload
+// ================= ADMIN UPLOAD =================
 bot.on('photo', async (ctx) => {
     const s = getSession(ctx.from.id);
 
@@ -352,7 +264,7 @@ bot.on('photo', async (ctx) => {
     const file = ctx.message.photo.pop();
     const link = await ctx.telegram.getFileLink(file.file_id);
 
-    const folder = path.join(__dirname, 'assets', s.data.lang, s.data.country, s.data.type);
+    const folder = path.join(__dirname, 'assets', 'en', 'bd', 'match');
     fs.mkdirSync(folder, { recursive: true });
 
     const res = await fetch(link.href);
@@ -361,21 +273,9 @@ bot.on('photo', async (ctx) => {
     const filePath = path.join(folder, `${Date.now()}.jpg`);
     fs.writeFileSync(filePath, Buffer.from(buffer));
 
-    ctx.reply("✅ Template Saved!");
+    ctx.reply("✅ Template Saved (EN/BD/MATCH)");
 });
 
-// ==========================
-// BROADCAST COMMAND
-// ==========================
-bot.command('broadcast', (ctx) => {
-    if (!ADMIN_IDS.includes(ctx.from.id)) return;
-
-    const s = getSession(ctx.from.id);
-    s.step = 'broadcast';
-
-    ctx.reply("📢 Send message to broadcast");
-});
-
-// ==========================
+// ================= START =================
 bot.launch();
-console.log("🚀 BOT LIVE");
+console.log("🚀 BOT RUNNING");
