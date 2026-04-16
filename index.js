@@ -134,134 +134,347 @@ bot.hears("📢 Broadcast", ctx=>{
 // ========= TEXT =========
 bot.on('text', async ctx=>{
     const s = getSession(ctx.from.id);
+    
+    if(!s) return;
 
     // BROADCAST
-    if(s.step==='broadcast'){
+    if(s.step === 'broadcast'){
         const users = await User.find({});
+        let successCount = 0;
         for(const u of users){
             try{
                 await bot.telegram.sendMessage(u.userId, ctx.message.text);
-            }catch{}
+                successCount++;
+            }catch(e){
+                console.log(`Failed to send to ${u.userId}:`, e.message);
+            }
         }
-        s.step='admin';
-        return ctx.reply("✅ Broadcast done");
+        s.step = 'admin';
+        return ctx.reply(`✅ Broadcast done! Sent to ${successCount} users`);
     }
 
     // PROMO
-    if(s.step==='promo'){
-        s.data.promo = ctx.message.text.trim();
-        ctx.reply("⏳ Generating...");
+    if(s.step === 'promo'){
+        if(!ctx.message.text || ctx.message.text.trim() === ''){
+            return ctx.reply("❌ Please enter a valid promo code");
+        }
+        s.data.promo = ctx.message.text.trim().toUpperCase();
+        ctx.reply("⏳ Generating... Please wait");
         return generate(ctx, s.data);
     }
 });
 
 // ========= GENERATE =========
-async function generate(ctx,data){
+async function generate(ctx, data){
     try{
-        const dir = path.join(__dirname,'assets','en','bd','match');
-
-        if(!fs.existsSync(dir)) return ctx.reply("❌ No templates");
-
-        const files = fs.readdirSync(dir).filter(f=>f.endsWith('.jpg')||f.endsWith('.png'));
-        if(!files.length) return ctx.reply("❌ No templates");
-
-        const outputs = [];
-
-        for(const file of files.slice(0,5)){
-            const input = path.join(dir,file);
-            const output = path.join('/tmp',Date.now()+file);
-
-            await addText(input,output,data.promo);
-            outputs.push(output);
+        // Build path based on selections
+        const lang = data.language || 'en';
+        const country = data.country || 'bd';
+        const type = data.type || 'match';
+        
+        const dir = path.join(__dirname, 'assets', lang, country, type);
+        
+        // Check if directory exists
+        if(!fs.existsSync(dir)){
+            console.log(`Directory not found: ${dir}`);
+            return ctx.reply("❌ No templates found for your selection");
         }
 
-        await ctx.replyWithMediaGroup(outputs.map(o=>({
-            type:'photo',
-            media:{ source:o }
-        })));
+        const files = fs.readdirSync(dir).filter(f=>f.endsWith('.jpg')||f.endsWith('.png'));
+        if(!files.length){
+            console.log(`No image files in: ${dir}`);
+            return ctx.reply("❌ No templates available");
+        }
 
-        await ctx.reply(`🔥 Promo Code: ${data.promo}`);
+        const outputs = [];
+        const maxFiles = Math.min(files.length, 5);
 
-        // ADMIN LOG
-        ADMIN_IDS.forEach(id=>{
-            bot.telegram.sendMessage(id,
-                `🎨 New Promo\nUser: ${ctx.from.id}\nCode: ${data.promo}`
-            );
+        for(let i = 0; i < maxFiles; i++){
+            const file = files[i];
+            const input = path.join(dir, file);
+            const output = path.join('/tmp', `${Date.now()}_${i}_${file}`);
+            
+            try{
+                await addText(input, output, data.promo);
+                outputs.push({ source: output, type: 'photo' });
+            }catch(err){
+                console.error(`Error processing ${file}:`, err);
+            }
+        }
+
+        if(outputs.length === 0){
+            return ctx.reply("❌ Failed to generate images");
+        }
+
+        // Send as media group
+        await ctx.replyWithMediaGroup(outputs);
+        
+        // Send promo code separately
+        await ctx.reply(`🎉 **Your Promo Code:** \`${data.promo}\``, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback("📋 Copy Code", `copy_${data.promo}`)]
+            ])
         });
 
+        // ADMIN LOG
+        for(const adminId of ADMIN_IDS){
+            try{
+                await bot.telegram.sendMessage(adminId,
+                    `🎨 **New Promo Generated**\n👤 User: ${ctx.from.id}\n🏷️ Code: ${data.promo}\n🌐 Lang: ${data.language}\n🇨🇾 Country: ${data.country}\n📦 Type: ${data.type}`,
+                    { parse_mode: 'Markdown' }
+                );
+            }catch(e){}
+        }
+        
+        // Clean up temp files
+        setTimeout(() => {
+            outputs.forEach(o => {
+                try{
+                    if(fs.existsSync(o.source)) fs.unlinkSync(o.source);
+                }catch(e){}
+            });
+        }, 60000);
+
+        // Reset session
+        delete sessions[ctx.from.id];
+
     }catch(e){
-        console.log(e);
-        ctx.reply("❌ Error");
+        console.error('Generate error:', e);
+        ctx.reply("❌ Error generating images. Please try again.");
     }
 }
 
-// ========= SMART TEXT ENGINE =========
+// ========= SMART TEXT ENGINE (FIXED) =========
 async function addText(input, output, promo) {
     const img = sharp(input);
     const { width, height } = await img.metadata();
-
-    const raw = await img.clone().resize(100,100).grayscale().raw().toBuffer();
-
-    let bestY = 0, bestScore = 999999;
-
-    for (let y = 50; y < 100; y++) {
-        let sum = 0;
-        for (let x = 10; x < 90; x++) {
-            sum += raw[y * 100 + x];
-        }
-        if (sum < bestScore) {
-            bestScore = sum;
-            bestY = y;
+    
+    // Resize to smaller for analysis
+    const analyzeWidth = 400;
+    const analyzeHeight = Math.floor((analyzeWidth / width) * height);
+    
+    const raw = await img.clone()
+        .resize(analyzeWidth, analyzeHeight)
+        .grayscale()
+        .raw()
+        .toBuffer();
+    
+    const cols = analyzeWidth;
+    const rows = analyzeHeight;
+    
+    // Find region with most consistent brightness (promo box area)
+    let bestRowStart = 0;
+    let bestRowEnd = 0;
+    let bestVariance = Infinity;
+    let bestMean = 0;
+    
+    // Look for uniform area (promo box)
+    for (let startY = 0; startY < rows - 40; startY++) {
+        for (let endY = startY + 30; endY < Math.min(startY + 100, rows); endY++) {
+            let sum = 0;
+            let sumSq = 0;
+            let pixelCount = 0;
+            
+            for (let y = startY; y <= endY; y++) {
+                for (let x = 30; x < cols - 30; x++) {
+                    const val = raw[y * cols + x];
+                    sum += val;
+                    sumSq += val * val;
+                    pixelCount++;
+                }
+            }
+            
+            if(pixelCount === 0) continue;
+            
+            const mean = sum / pixelCount;
+            const variance = (sumSq / pixelCount) - (mean * mean);
+            
+            // Lower variance = more uniform area
+            if (variance < bestVariance && mean > 40 && mean < 220) {
+                bestVariance = variance;
+                bestRowStart = startY;
+                bestRowEnd = endY;
+                bestMean = mean;
+            }
         }
     }
-
-    const yPos = (bestY / 100) * height;
-    const fontSize = Math.max(70, Math.min(width * 0.085, 120));
-
-    const svg = `
-    <svg width="${width}" height="${height}">
-        <style>
-            @font-face {
-                font-family: 'Bebas';
-                src: url('file://${process.cwd()}/fonts/BebasNeue-Regular.ttf');
+    
+    // Calculate Y position (center of uniform area)
+    let yPos;
+    if (bestVariance !== Infinity) {
+        const centerRow = (bestRowStart + bestRowEnd) / 2;
+        yPos = (centerRow / rows) * height;
+    } else {
+        // Fallback - look for brightest area (text is often light on dark background)
+        let brightestY = height * 0.7;
+        let maxBrightness = 0;
+        
+        for (let y = 0; y < rows; y++) {
+            let rowSum = 0;
+            for (let x = 30; x < cols - 30; x++) {
+                rowSum += raw[y * cols + x];
             }
-        </style>
-
-        <text x="50%" y="${yPos+3}" text-anchor="middle"
-        font-family="Bebas" font-size="${fontSize}"
-        fill="black" opacity="0.6">${promo}</text>
-
-        <text x="50%" y="${yPos}" text-anchor="middle"
-        font-family="Bebas" font-size="${fontSize}"
-        fill="white" stroke="black" stroke-width="2"
-        letter-spacing="4">${promo}</text>
+            const avgBrightness = rowSum / (cols - 60);
+            if (avgBrightness > maxBrightness) {
+                maxBrightness = avgBrightness;
+                brightestY = (y / rows) * height;
+            }
+        }
+        yPos = brightestY;
+    }
+    
+    // Dynamic font size
+    const promoLength = promo.length;
+    let fontSize = Math.min(width * 0.1, 130);
+    
+    if (promoLength > 12) {
+        fontSize = fontSize * (0.7 - (promoLength - 12) * 0.015);
+    } else if (promoLength > 8) {
+        fontSize = fontSize * 0.85;
+    }
+    fontSize = Math.max(40, Math.min(fontSize, 130));
+    
+    const pillWidth = Math.min(width * 0.85, fontSize * promoLength * 0.7);
+    const pillX = (width - pillWidth) / 2;
+    const pillHeight = fontSize * 1.3;
+    const pillY = yPos - (pillHeight / 1.8);
+    
+    // Create SVG with bold text
+    const svg = `
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="3" dy="3" stdDeviation="4" flood-color="#000000" flood-opacity="0.9"/>
+            </filter>
+            <linearGradient id="pillGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" style="stop-color:#000000;stop-opacity:0.75" />
+                <stop offset="100%" style="stop-color:#000000;stop-opacity:0.85" />
+            </linearGradient>
+        </defs>
+        
+        <!-- Dark pill background -->
+        <rect 
+            x="${pillX}" 
+            y="${pillY}" 
+            width="${pillWidth}" 
+            height="${pillHeight}"
+            rx="${pillHeight / 2}"
+            ry="${pillHeight / 2}"
+            fill="url(#pillGrad)"
+            stroke="rgba(255,215,0,0.3)"
+            stroke-width="2"
+        />
+        
+        <!-- Main bold text -->
+        <text 
+            x="50%" 
+            y="${yPos + fontSize * 0.35}" 
+            text-anchor="middle"
+            font-family="'Arial Black', Arial, Helvetica, sans-serif" 
+            font-weight="900"
+            font-size="${fontSize}"
+            fill="#FFD700"
+            letter-spacing="${Math.max(3, fontSize * 0.06)}"
+            filter="url(#shadow)"
+        >${escapeXml(promo)}</text>
+        
+        <!-- White outline effect -->
+        <text 
+            x="50%" 
+            y="${yPos + fontSize * 0.35}" 
+            text-anchor="middle"
+            font-family="'Arial Black', Arial, Helvetica, sans-serif" 
+            font-weight="900"
+            font-size="${fontSize}"
+            fill="none"
+            stroke="#FFFFFF"
+            stroke-width="2"
+            letter-spacing="${Math.max(3, fontSize * 0.06)}"
+        >${escapeXml(promo)}</text>
     </svg>
     `;
-
-    await img.composite([{ input: Buffer.from(svg) }])
-    .jpeg({ quality:95 })
-    .toFile(output);
+    
+    await img
+        .composite([{ input: Buffer.from(svg) }])
+        .jpeg({ quality: 92 })
+        .toFile(output);
 }
 
-// ========= UPLOAD =========
+function escapeXml(str) {
+    return str.replace(/[<>&'"]/g, function(c) {
+        switch(c) {
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '&': return '&amp;';
+            case "'": return '&apos;';
+            case '"': return '&quot;';
+            default: return c;
+        }
+    });
+}
+
+// ========= COPY BUTTON HANDLER =========
+bot.action(/copy_(.+)/, async ctx => {
+    const promoCode = ctx.match[1];
+    try {
+        await ctx.answerCbQuery(`✅ Copied: ${promoCode}`, { show_alert: true });
+        await ctx.reply(`📋 Promo code copied: \`${promoCode}\``, { parse_mode: 'Markdown' });
+    } catch(e) {
+        console.error('Copy error:', e);
+    }
+});
+
+// ========= UPLOAD TEMPLATE =========
 bot.on('photo', async ctx=>{
     const s = getSession(ctx.from.id);
-    if(s.step!=='upload') return;
+    if(!s || s.step !== 'upload') return;
+    
+    if(!ADMIN_IDS.includes(ctx.from.id)){
+        delete sessions[ctx.from.id];
+        return;
+    }
 
-    const file = ctx.message.photo.pop();
-    const link = await ctx.telegram.getFileLink(file.file_id);
+    try{
+        const file = ctx.message.photo.pop();
+        const link = await ctx.telegram.getFileLink(file.file_id);
+        
+        // You can modify these paths based on your needs
+        const folder = path.join(__dirname, 'assets', 'en', 'bd', 'match');
+        fs.mkdirSync(folder, { recursive: true });
+        
+        const res = await fetch(link.href);
+        const buffer = await res.buffer();
+        
+        const filename = `${Date.now()}.jpg`;
+        fs.writeFileSync(path.join(folder, filename), buffer);
+        
+        ctx.reply(`✅ Template uploaded successfully!\n📁 Location: ${filename}`);
+        s.step = 'admin';
+    }catch(e){
+        console.error('Upload error:', e);
+        ctx.reply("❌ Failed to upload image");
+        s.step = 'admin';
+    }
+});
 
-    const folder = path.join(__dirname,'assets','en','bd','match');
-    fs.mkdirSync(folder,{ recursive:true });
-
-    const res = await fetch(link.href);
-    const buffer = await res.arrayBuffer();
-
-    fs.writeFileSync(path.join(folder,Date.now()+".jpg"),Buffer.from(buffer));
-
-    ctx.reply("✅ Uploaded");
+// ========= FALLBACK FOR UNKNOWN MESSAGES =========
+bot.on('message', async ctx => {
+    const s = getSession(ctx.from.id);
+    
+    // If in promo step but got non-text
+    if(s && s.step === 'promo' && !ctx.message.text){
+        return ctx.reply("❌ Please send a valid text promo code");
+    }
 });
 
 // ========= RUN =========
-bot.launch();
-console.log("🚀 Bot Running");
+bot.launch().then(() => {
+    console.log("🚀 Bot Running Successfully");
+}).catch(err => {
+    console.error("Failed to launch bot:", err);
+});
+
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
