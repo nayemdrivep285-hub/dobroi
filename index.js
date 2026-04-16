@@ -220,59 +220,35 @@ async function generateBanners(ctx, data) {
 }
 
 // ================= FINAL TEXT ENGINE =================
-async function addPromoText(input, output, promo) {
+async function addPromoText(input, output, promoCode) {
     const img = sharp(input);
     const { width, height } = await img.metadata();
 
-    // DEFINE THE PURPLE BOX POSITION
-    // Adjust these values based on your actual banner
-    const boxTop = height * 0.82;      // Where purple box starts (82% down)
-    const boxBottom = height * 0.94;    // Where purple box ends (94% down)
-    const boxCenterY = (boxTop + boxBottom) / 2;  // Middle of purple box
-    
-    // Font size based on box height
-    const boxHeight = boxBottom - boxTop;
-    const fontSize = Math.min(boxHeight * 0.5, 65);  // 50% of box height
-    
-    const svg = `
+    // keep your design font size logic stable
+    const fontSize = Math.max(70, Math.min(width * 0.09, 120));
+
+    const textSvg = `
     <svg width="${width}" height="${height}">
-        <defs>
-            <filter id="glow">
-                <feGaussianBlur stdDeviation="3" result="blur"/>
-                <feMerge>
-                    <feMergeNode in="blur"/>
-                    <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-            </filter>
-        </defs>
-
-        <!-- Shadow -->
-        <text x="50%" y="${boxCenterY + 2}"
-        text-anchor="middle"
-        dominant-baseline="middle"
-        font-size="${fontSize}"
-        font-family="Arial Black"
-        fill="black"
-        opacity="0.5">${promo}</text>
-
-        <!-- Main Text -->
-        <text x="50%" y="${boxCenterY}"
-        text-anchor="middle"
-        dominant-baseline="middle"
-        font-size="${fontSize}"
-        font-family="Arial Black"
-        fill="white"
+      <text 
+        x="50%" 
+        y="85%" 
+        text-anchor="middle" 
+        font-family="Azo Sans Uber, Arial Black, Impact, sans-serif"
+        font-size="${fontSize}" 
+        font-weight="900"
+        fill="#ff00a2" 
         stroke="black"
-        stroke-width="2"
-        letter-spacing="3"
-        filter="url(#glow)">
-        ${promo}
-        </text>
+        stroke-width="4"
+        paint-order="stroke"
+        letter-spacing="2px"
+      >
+        ${promoCode}
+      </text>
     </svg>
     `;
 
     await img
-        .composite([{ input: Buffer.from(svg) }])
+        .composite([{ input: Buffer.from(textSvg) }])
         .jpeg({ quality: 95 })
         .toFile(output);
 }
