@@ -224,16 +224,16 @@ async function addPromoText(input, output, promo) {
     const img = sharp(input);
     const { width, height } = await img.metadata();
 
-    // 🔥 BOTTOM-CENTER POSITION (inside promo box)
-    const yPosition = height * 0.85;  // 85% from top (near bottom)
+    // 🔥 INSIDE PURPLE BOX - BOTTOM CENTER POSITION
+    const yPosition = height * 0.88;  // Inside the purple box at bottom
 
-    const fontSize = Math.max(50, Math.min(width * 0.08, 100));
+    const fontSize = Math.max(55, Math.min(width * 0.07, 90));
 
     const svg = `
     <svg width="${width}" height="${height}">
         <defs>
             <filter id="glow">
-                <feGaussianBlur stdDeviation="4" result="blur"/>
+                <feGaussianBlur stdDeviation="3" result="blur"/>
                 <feMerge>
                     <feMergeNode in="blur"/>
                     <feMergeNode in="SourceGraphic"/>
@@ -257,7 +257,7 @@ async function addPromoText(input, output, promo) {
         fill="white"
         stroke="black"
         stroke-width="2"
-        letter-spacing="4"
+        letter-spacing="3"
         filter="url(#glow)">
         ${promo}
         </text>
