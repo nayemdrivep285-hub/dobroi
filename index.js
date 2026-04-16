@@ -231,7 +231,7 @@ async function addPromoText(input, output, promoCode) {
     <svg width="${width}" height="${height}">
       <text 
         x="50%" 
-        y="88%" 
+        y="94%" 
         text-anchor="middle" 
         font-family="Azo Sans Uber, Arial Black, Impact, sans-serif"
         font-size="${fontSize}" 
